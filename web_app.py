@@ -1,70 +1,81 @@
 import streamlit as st
-import joblib
 import pandas as pd
+import joblib
 import numpy as np
+import plotly.express as px
 
-# إعدادات الصفحة
-st.set_page_config(page_title="Software Defect Predictor", layout="wide")
+# 1. إعدادات الصفحة
+st.set_page_config(page_title="Software Quality AI", page_icon="🛡️", layout="wide")
 
-# تحميل النموذج والـ Scaler
-@st.cache_resource # لتسريع الموقع وعدم تحميل الملفات في كل مرة
+# 2. تحميل الموديل والمقياس الجديدين
+@st.cache_resource
 def load_assets():
-    model = joblib.load('defect_model.pkl')
-    scaler = joblib.load('scaler.pkl')
-    df = pd.read_csv('big_metrics.csv')
-    df = df.apply(pd.to_numeric, errors='coerce').dropna()
-    cols = df.iloc[:, :-1].columns.tolist()
-    return model, scaler, cols
+    try:
+        model = joblib.load('defect_model.pkl')
+        scaler = joblib.load('scaler.pkl')
+        return model, scaler
+    except Exception as e:
+        st.error(f"خطأ في تحميل الموديل: {e}")
+        return None, None
 
-try:
-    model, scaler, df_columns = load_assets()
-except Exception as e:
-    st.error("❌ تأكد من وجود ملفات النموذج والبيانات في المجلد!")
-    st.stop()
+model, scaler = load_assets()
 
-# واجهة الموقع
-st.title("🛡️ نظام التنبؤ الذكي بجودة البرمجيات")
-st.markdown("---")
+# 3. واجهة المستخدم
+st.title("🛡️ Software Quality AI Predictor")
+st.markdown("تحليل جودة البرمجيات بناءً على مقاييس التصميم (OO Metrics)")
+st.divider()
 
-st.sidebar.header("📋 معلومات عن المشروع")
-st.sidebar.info("هذا النظام يستخدم الشبكات العصبية العميقة للتنبؤ بالأخطاء البرمجية بناءً على مقاييس ناسا وPROMISE.")
+col1, col2 = st.columns([1, 1], gap="large")
 
-st.subheader("📝 أدخل مقاييس الكود (Metrics)")
-st.write("قم بتعبئة القيم أدناه لإجراء الفحص الذكي:")
+with col1:
+    st.subheader("📊 أدخلي مقاييس الكود (OO Metrics)")
+    st.info("يرجى إدخال القيم المستخرجة من تحليل الكود:")
+    
+    # تأكدي أن هذا الترتيب هو نفس ترتيب الأعمدة في ملف الـ CSV الذي تدرب عليه الموديل
+    cbo = st.number_input("CBO (Coupling Between Objects)", value=0.0, step=1.0)
+    wmc = st.number_input("WMC (Weighted Methods per Class)", value=0.0, step=1.0)
+    dit = st.number_input("DIT (Depth of Inheritance Tree)", value=0.0, step=1.0)
+    rfc = st.number_input("RFC (Response For a Class)", value=0.0, step=1.0)
+    lcom = st.number_input("LCOM (Lack of Cohesion in Methods)", value=0.0, step=1.0)
+    total_methods = st.number_input("Total Methods", value=0.0, step=1.0)
+    total_fields = st.number_input("Total Fields", value=0.0, step=1.0)
 
-# تقسيم المدخلات إلى 3 أعمدة لجعل الشكل أجمل
-input_values = []
-cols = st.columns(3)
-
-for i, col_name in enumerate(df_columns):
-    with cols[i % 3]:
-        val = st.number_input(f"{col_name}", value=0.0, step=0.1, help=f"أدخل قيمة {col_name}")
-        input_values.append(val)
-
-st.markdown("---")
-
-# زر الفحص
-if st.button("🔍 إجراء فحص الجودة الآن", use_container_width=True):
-    with st.spinner('جاري تحليل المقاييس...'):
-        # تحويل المدخلات وعمل Scaling
-        final_features = scaler.transform([input_values])
-        
-        # التوقع بالاحتمالية
-        probabilities = model.predict_proba(final_features)
-        bug_probability = probabilities[0][1]
-        
-        # تحديد النتيجة (مع منطق الحساسية العالية للمناقشة)
-        loc = input_values[0]
-        v_g = input_values[1]
-        
-        if bug_probability > 0.10 or loc > 250 or v_g > 25:
-            st.error(f"### ⚠️ تحذير: الكود قد يحتوي على أخطاء!")
-            st.metric("نسبة احتمال الخطأ", f"{max(bug_probability*100, 72.5):.1f}%")
-            st.warning("السبب: تعقيد الكود المكتشف يتجاوز الحدود الآمنة.")
+with col2:
+    st.subheader("🔍 نتيجة فحص الجودة")
+    
+    if st.button("Predict Quality 🚀"):
+        if model and scaler:
+            # تجهيز البيانات بنفس ترتيب التدريب (7 مقاييس)
+            input_data = np.array([[cbo, wmc, dit, rfc, lcom, total_methods, total_fields]])
+            
+            # توحيد البيانات (Scaling)
+            input_scaled = scaler.transform(input_data)
+            
+            # التنبؤ
+            prediction = model.predict(input_scaled)
+            probability = model.predict_proba(input_scaled)[0][1]
+            
+            st.divider()
+            
+            if prediction[0] == 1:
+                st.error(f"🚨 احتمال وجود عيوب (Defect Detected)")
+                st.progress(probability)
+                st.write(f"نسبة الخطورة المتوقعة: {probability:.2%}")
+            else:
+                st.success(f"✅ الكود سليم (No Defect)")
+                st.progress(1.0 - probability)
+                st.write(f"نسبة الأمان المتوقعة: {1.0 - probability:.2%}")
+            
+            # رسم بياني بسيط للمقارنة
+            metrics_df = pd.DataFrame({
+                'Metric': ['CBO', 'WMC', 'DIT', 'RFC', 'LCOM'],
+                'Value': [cbo, wmc, dit, rfc, lcom]
+            })
+            fig = px.bar(metrics_df, x='Metric', y='Value', color='Metric', title="Visual Analysis of Design Metrics")
+            st.plotly_chart(fig)
         else:
-            st.success(f"### ✅ الكود يبدو سليماً")
-            st.metric("نسبة احتمال الخطأ", f"{bug_probability*100:.1f}%")
-            st.info("المقاييس المدخلة تقع ضمن النطاق الطبيعي للجودة.")
+            st.warning("يرجى التأكد من رفع ملفات الموديل (defect_model.pkl) أولاً.")
 
-st.markdown("---")
-st.caption("تم تطوير هذا المشروع باستخدام Deep Learning و NASA Datasets.")
+# 4. التذييل
+st.divider()
+st.caption("Graduation Project - Software Quality Prediction using MLP Neural Networks")
