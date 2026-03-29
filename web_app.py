@@ -2,80 +2,72 @@ import streamlit as st
 import pandas as pd
 import joblib
 import numpy as np
-import plotly.express as px
+from radon.raw import analyze
+from radon.metrics import h_visit
+from radon.complexity import cc_visit
 
 # 1. إعدادات الصفحة
-st.set_page_config(page_title="Software Quality AI", page_icon="🛡️", layout="wide")
+st.set_config(page_title="AI Code Auditor", page_icon="🔍")
 
-# 2. تحميل الموديل والمقياس الجديدين
+# 2. تحميل الموديل والسكيلر
 @st.cache_resource
-def load_assets():
+def load_model():
     try:
         model = joblib.load('defect_model.pkl')
         scaler = joblib.load('scaler.pkl')
         return model, scaler
-    except Exception as e:
-        st.error(f"خطأ في تحميل الموديل: {e}")
+    except:
         return None, None
 
-model, scaler = load_assets()
+model, scaler = load_model()
 
-# 3. واجهة المستخدم
-st.title("🛡️ Software Quality AI Predictor")
-st.markdown("تحليل جودة البرمجيات بناءً على مقاييس التصميم (OO Metrics)")
-st.divider()
+# 3. دالة استخراج المقاييس من الكود (تلقائياً)
+def extract_metrics(code):
+    try:
+        raw = analyze(code)
+        cc = cc_visit(code)
+        h = h_visit(code)
+        
+        # ترتيب المقاييس السبعة كما تعلمها الموديل في الشاشة السوداء
+        # [cbo, wmc, dit, rfc, lcom, totalMethods, totalFields]
+        # ملاحظة: سنستخدم قيم تقريبية من Radon لتناسب الـ OO Metrics
+        cbo = len(raw.loc) / 10  # تقديري للارتباط
+        wmc = sum([c.complexity for c in cc]) if cc else 1
+        dit = 1.0 # القيمة الافتراضية للعمق
+        rfc = h.total.bugs * 10 
+        lcom = h.total.difficulty
+        totalMethods = len(cc)
+        totalFields = h.total.n / 5
+        
+        return [cbo, wmc, dit, rfc, lcom, totalMethods, totalFields]
+    except Exception as e:
+        return None
 
-col1, col2 = st.columns([1, 1], gap="large")
+# 4. الواجهة البرمجية
+st.title("🔍 AI Software Quality Auditor")
+st.write("ضع الكود الخاص بك هنا، وسيقوم الذكاء الاصطناعي بتحليله فوراً!")
 
-with col1:
-    st.subheader("📊 أدخلي مقاييس الكود (OO Metrics)")
-    st.info("يرجى إدخال القيم المستخرجة من تحليل الكود:")
-    
-    # تأكدي أن هذا الترتيب هو نفس ترتيب الأعمدة في ملف الـ CSV الذي تدرب عليه الموديل
-    cbo = st.number_input("CBO (Coupling Between Objects)", value=0.0, step=1.0)
-    wmc = st.number_input("WMC (Weighted Methods per Class)", value=0.0, step=1.0)
-    dit = st.number_input("DIT (Depth of Inheritance Tree)", value=0.0, step=1.0)
-    rfc = st.number_input("RFC (Response For a Class)", value=0.0, step=1.0)
-    lcom = st.number_input("LCOM (Lack of Cohesion in Methods)", value=0.0, step=1.0)
-    total_methods = st.number_input("Total Methods", value=0.0, step=1.0)
-    total_fields = st.number_input("Total Fields", value=0.0, step=1.0)
+code_input = st.text_area("أدخلي كود بايثون هنا:", height=300, placeholder="def example_function()...")
 
-with col2:
-    st.subheader("🔍 نتيجة فحص الجودة")
-    
-    if st.button("Predict Quality 🚀"):
-        if model and scaler:
-            # تجهيز البيانات بنفس ترتيب التدريب (7 مقاييس)
-            input_data = np.array([[cbo, wmc, dit, rfc, lcom, total_methods, total_fields]])
-            
-            # توحيد البيانات (Scaling)
-            input_scaled = scaler.transform(input_data)
-            
+if st.button("Start AI Audit 🚀"):
+    if code_input:
+        metrics = extract_metrics(code_input)
+        if metrics and model:
             # التنبؤ
+            input_scaled = scaler.transform([metrics])
             prediction = model.predict(input_scaled)
-            probability = model.predict_proba(input_scaled)[0][1]
+            prob = model.predict_proba(input_scaled)[0][1]
             
             st.divider()
-            
             if prediction[0] == 1:
-                st.error(f"🚨 احتمال وجود عيوب (Defect Detected)")
-                st.progress(probability)
-                st.write(f"نسبة الخطورة المتوقعة: {probability:.2%}")
+                st.error(f"🚨 تحذير: تم اكتشاف احتمالية وجود عيوب (الثقة: {prob:.2%})")
+                st.info("نصيحة: الكود يحتوي على تعقيد عالي، يفضل إعادة هيكلته.")
             else:
-                st.success(f"✅ الكود سليم (No Defect)")
-                st.progress(1.0 - probability)
-                st.write(f"نسبة الأمان المتوقعة: {1.0 - probability:.2%}")
+                st.success(f"✅ ممتاز: الكود سليم ومعياري (الثقة: {1-prob:.2%})")
             
-            # رسم بياني بسيط للمقارنة
-            metrics_df = pd.DataFrame({
-                'Metric': ['CBO', 'WMC', 'DIT', 'RFC', 'LCOM'],
-                'Value': [cbo, wmc, dit, rfc, lcom]
-            })
-            fig = px.bar(metrics_df, x='Metric', y='Value', color='Metric', title="Visual Analysis of Design Metrics")
-            st.plotly_chart(fig)
+            # عرض المقاييس التي استخرجها البرنامج
+            with st.expander("أظهر المقاييس المستخرجة (Technical Details)"):
+                labels = ['CBO', 'WMC', 'DIT', 'RFC', 'LCOM', 'Methods', 'Fields']
+                st.table(pd.DataFrame({'Metric': labels, 'Value': metrics}))
         else:
-            st.warning("يرجى التأكد من رفع ملفات الموديل (defect_model.pkl) أولاً.")
-
-# 4. التذييل
-st.divider()
-st.caption("Graduation Project - Software Quality Prediction using MLP Neural Networks")
+            st.error("تأكدي من كتابة كود بايثون صحيح لكي نتمكن من تحليله.")
