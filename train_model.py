@@ -4,7 +4,7 @@ import joblib
 from sklearn.preprocessing import StandardScaler
 from sklearn.neural_network import MLPClassifier
 
-# 1. تحميل الملفين
+# 1. تحميل الملفات
 try:
     df1 = pd.read_csv('big_metrics.csv')
     df2 = pd.read_csv('kc2.csv')
@@ -13,31 +13,38 @@ except Exception as e:
     print(f"❌ خطأ في تحميل الملفات: {e}")
     exit()
 
-# 2. دمج الملفين (Concatenation)
-# سنأخذ الأعمدة المشتركة فقط بين الملفين لضمان التوافق
+# 2. العثور على الأعمدة المشتركة ودمج الملفين
 common_columns = list(set(df1.columns) & set(df2.columns))
 df_combined = pd.concat([df1[common_columns], df2[common_columns]], ignore_index=True)
 
-print(f"📊 إجمالي عدد الأسطر بعد الدمج: {len(df_combined)}")
+# تنظيف الفراغات
+df_combined = df_combined.dropna() 
 
-# 3. تنظيف البيانات (إبقاء الأرقام فقط)
+# 3. إبقاء الأرقام فقط وتجهيز المدخلات والمخرجات
 df_numeric = df_combined.select_dtypes(include=[np.number])
 
-# نفترض أن العمود الأخير هو النتيجة (Target) والباقي هي المقاييس (Features)
-X = df_numeric.iloc[:, :-1]  # كل الأعمدة ما عدا الأخير
-y = df_numeric.iloc[:, -1]   # العمود الأخير فقط
+X = df_numeric.iloc[:, :-1]  # الميزات
+y_raw = df_numeric.iloc[:, -1] # النتيجة الخام (التي سببت المشكلة)
+
+# --- الحل: تحويل النتيجة إلى 0 و 1 ---
+# أي قيمة أكبر من 0 تصبح 1 (Defective)، وغير ذلك 0 (Clean)
+y = (y_raw > 0).astype(int)
+# -----------------------------------
+
+print(f"📊 حجم البيانات: {len(df_combined)} سطر.")
+print(f"🎯 توزيع النتائج: {np.bincount(y)} (0: سليم، 1: معيوب)")
 
 # 4. توحيد البيانات والتدريب
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
-print("🔄 جاري تدريب الموديل على البيانات المدمجة...")
-mlp = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=1000, random_state=42)
+print("🔄 جاري تدريب الموديل (الشبكة العصبية)...")
+mlp = MLPClassifier(hidden_layer_sizes=(100, 50), max_iter=2000, random_state=42)
 mlp.fit(X_scaled, y)
 
-# 5. حفظ الموديل والسكيلر وقائمة الأعمدة (مهم جداً للموقع)
+# 5. حفظ الموديل والسكيلر وقائمة الأعمدة
 joblib.dump(mlp, 'defect_model.pkl')
 joblib.dump(scaler, 'scaler.pkl')
-joblib.dump(X.columns.tolist(), 'features_list.pkl') # سنحفظ أسماء الأعمدة لنعرفها في الموقع
+joblib.dump(X.columns.tolist(), 'features_list.pkl')
 
-print("✨ تم دمج البيانات والتدريب بنجاح!")
+print("✨ تم التدريب وحل مشكلة التصنيفات بنجاح!")
