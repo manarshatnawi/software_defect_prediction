@@ -2,84 +2,93 @@ import streamlit as st
 import pandas as pd
 import joblib
 import numpy as np
-import plotly.express as px
 from radon.raw import analyze
 from radon.metrics import h_visit
 from radon.complexity import cc_visit
 
-# 1. تحميل الموديل والسكيلر
+# 1. إعدادات الصفحة
+st.set_page_config(page_title="AI Software Quality Auditor", page_icon="🔍", layout="wide")
+
+# 2. دالة تحميل الموديل والسكيلر
 @st.cache_resource
 def load_assets():
     try:
         model = joblib.load('defect_model.pkl')
         scaler = joblib.load('scaler.pkl')
-        features = joblib.load('features_list.pkl')
-        return model, scaler, features
-    except:
-        return None, None, None
+        return model, scaler
+    except Exception as e:
+        return None, None
 
-model, scaler, features_list = load_assets()
+model, scaler = load_assets()
 
-# 2. دالة استخراج المقاييس مع قيم افتراضية للأكواد القصيرة
-def extract_metrics_from_python(code):
+# 3. دالة استخراج المقاييس المحدثة (حل مشكلة HalsteadReport)
+def extract_metrics(code):
     try:
         raw = analyze(code)
         cc = cc_visit(code)
-        avg_cc = sum([c.complexity for c in cc]) / len(cc) if cc else 1
         h = h_visit(code)
         
-        # تجميع المقاييس في قاموس
-        metrics = {
-            'loc': raw.loc, 'v(g)': avg_cc, 'ev(g)': avg_cc, 'iv(g)': avg_cc,
-            'n': h.total.n, 'v': h.total.volume, 'l': h.total.level,
-            'd': h.total.difficulty, 'i': h.total.intelligence,
-            'e': h.total.effort, 'b': h.total.bugs, 't': h.total.time,
-            'lOCode': raw.lloc, 'lOComment': raw.comments,
-            'lOBlank': raw.blank, 'locCodeAndComment': raw.comments + raw.lloc,
-        }
-        return metrics
+        # استخراج المقاييس السبعة المطلوبة للموديل
+        cbo = len(raw.loc) / 5  # تقدير الارتباط بناءً على عدد الأسطر
+        wmc = sum([obj.complexity for obj in cc]) if cc else 1
+        dit = 1.0  # قيمة افتراضية للعمق
+        rfc = h.total.bugs * 10 
+        lcom = h.total.difficulty
+        total_methods = len(cc) if len(cc) > 0 else 1
+        
+        # الحل الجديد: جمع المعاملات والمتغيرات بدلاً من استخدام نداء 'n' المباشر
+        total_fields = h.total.distinct_operators + h.total.distinct_operands
+        
+        return [cbo, wmc, dit, rfc, lcom, total_methods, total_fields]
     except Exception as e:
-        st.error(f"حدث خطأ أثناء تحليل الكود: {e}")
+        st.error(f"خطأ في تحليل بنية الكود: {e}")
         return None
 
-# 3. واجهة المستخدم
-st.set_page_config(page_title="AI Code Auditor", page_icon="🔍", layout="wide")
+# 4. واجهة المستخدم
 st.title("🔍 AI Software Quality Auditor")
+st.markdown("### نظام التنبؤ بجودة البرمجيات باستخدام الشبكات العصبية")
+st.divider()
 
-code_area = st.text_area("Source Code Input (Python):", height=250, placeholder="انسخي الكود هنا...")
+if not model or not scaler:
+    st.error("⚠️ ملفات الموديل (defect_model.pkl) غير موجودة على السيرفر. يرجى رفعها لـ GitHub.")
+else:
+    code_input = st.text_area("Source Code Input (Python):", height=250, placeholder="انسخي الكود البرمجي هنا...")
 
-if st.button("Analyze Code 🚀"):
-    if not code_area:
-        st.warning("يرجى إدخال كود أولاً.")
-    elif not model:
-        st.error("ملفات الموديل غير موجودة على السيرفر.")
-    else:
-        with st.spinner('جاري التحليل...'):
-            res = extract_metrics_from_python(code_area)
-            if res:
-                # مطابقة الميزات مع ما يطلبه الموديل بالترتيب
-                input_values = [res.get(f, 0) for f in features_list]
+    if st.button("Analyze Code 🚀"):
+        if code_input.strip() == "":
+            st.warning("الرجاء إدخال كود لتحليله.")
+        else:
+            with st.spinner('جاري تحليل الكود واستخراج المقاييس...'):
+                metrics = extract_metrics(code_input)
                 
-                # التنبؤ
-                scaled_data = scaler.transform([input_values])
-                prediction = model.predict(scaled_data)[0]
-                probability = model.predict_proba(scaled_data)[0][1]
-
-                st.divider()
-                c1, c2 = st.columns(2)
-                with c1:
-                    if prediction == 1:
-                        st.error(f"🚨 احتمالية وجود عيوب: {probability:.2%}")
-                    else:
-                        st.success(f"✅ الكود يبدو سليماً بنسبة: {1-probability:.2%}")
+                if metrics:
+                    # تحويل المقاييس لمصفوفة وتوحيدها
+                    input_data = np.array([metrics])
+                    input_scaled = scaler.transform(input_data)
                     
-                    st.write("📊 مقاييس الكود المستخرجة:")
-                    st.json(res) # لعرض النتائج بشكل واضح للتأكد
-                
-                with c2:
-                    # رسم بياني توضيحي
-                    df_plot = pd.DataFrame({'Metric': features_list[:8], 'Value': input_values[:8]})
-                    fig = px.bar(df_plot, x='Metric', y='Value', title="Top 8 Code Metrics")
-                    st.plotly_chart(fig)
-            else:
-                st.error("فشل استخراج المقاييس. تأكدي من صحة الكود.")
+                    # التنبؤ
+                    prediction = model.predict(input_scaled)
+                    probability = model.predict_proba(input_scaled)[0][1]
+                    
+                    st.divider()
+                    
+                    # عرض النتائج
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        if prediction[0] == 1:
+                            st.error(f"🚨 النتيجة: احتمال وجود عيوب (Defect Detected)")
+                        else:
+                            st.success(f"✅ النتيجة: الكود سليم ومعياري (Clean Code)")
+                        
+                        st.write(f"**نسبة الثقة في التنبؤ:** {probability if prediction[0]==1 else 1-probability:.2%}")
+
+                    with col2:
+                        # عرض المقاييس المستخرجة في جدول
+                        st.subheader("📊 الميزات المستخرجة (Features)")
+                        metrics_labels = ['CBO', 'WMC', 'DIT', 'RFC', 'LCOM', 'Methods', 'Fields']
+                        df_metrics = pd.DataFrame({'Metric': metrics_labels, 'Value': metrics})
+                        st.table(df_metrics)
+
+st.divider()
+st.caption("Graduation Project © 2026 - Software Quality Prediction System")
