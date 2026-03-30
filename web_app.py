@@ -3,81 +3,91 @@ import pandas as pd
 import joblib
 import numpy as np
 import plotly.express as px
+from radon.raw import analyze
+from radon.metrics import h_visit
+from radon.complexity import cc_visit
 
-# 1. إعدادات الصفحة والجمالية
-st.set_page_config(page_title="Software Quality AI Auditor", page_icon="🛡️", layout="wide")
-
-# 2. تحميل الموديل والسكيلر وقائمة الميزات المشتركة
+# 1. تحميل الموديل والسكيلر
 @st.cache_resource
 def load_assets():
     try:
         model = joblib.load('defect_model.pkl')
         scaler = joblib.load('scaler.pkl')
-        # تحميل قائمة الأعمدة التي تدرب عليها الموديل لضمان التوافق
         features = joblib.load('features_list.pkl')
         return model, scaler, features
-    except Exception as e:
-        st.error(f"⚠️ خطأ في تحميل ملفات الموديل: {e}")
+    except:
         return None, None, None
 
 model, scaler, features_list = load_assets()
 
+# 2. دالة استخراج المقاييس من الكود
+def extract_metrics_from_python(code):
+    try:
+        raw = analyze(code)
+        cc = cc_visit(code)
+        avg_cc = sum([c.complexity for c in cc]) / len(cc) if cc else 1
+        h = h_visit(code)
+        
+        # تحويل النتائج لقاموس (Dictionary)
+        # ملاحظة: سنحاول مطابقة أسماء المقاييس مع ما تدرب عليه الموديل
+        extracted = {
+            'loc': raw.loc,
+            'v(g)': avg_cc,
+            'ev(g)': avg_cc,
+            'iv(g)': avg_cc,
+            'n': h.total.n,
+            'v': h.total.volume,
+            'l': h.total.level,
+            'd': h.total.difficulty,
+            'i': h.total.intelligence,
+            'e': h.total.effort,
+            'b': h.total.bugs,
+            't': h.total.time,
+            'lOCode': raw.lloc,
+            'lOComment': raw.comments,
+            'lOBlank': raw.blank,
+            'locCodeAndComment': raw.comments + raw.lloc,
+        }
+        return extracted
+    except:
+        return None
+
 # 3. واجهة المستخدم
-st.title("🛡️ AI Software Quality & Defect Predictor")
-st.markdown(f"هذا النظام مدرب على دمج بيانات **KC2** و **Big Metrics** للتنبؤ بالعيوب البرمجية باستخدام {len(features_list) if features_list else 0} مقياساً هندسياً.")
-st.divider()
+st.set_page_config(page_title="AI Code Auditor", page_icon="🔍")
+st.title("🔍 AI Code Quality Auditor")
+st.markdown("قومي بلصق كود بايثون هنا، وسيقوم النظام باستخراج المقاييس والتنبؤ بالعيوب تلقائياً!")
 
-# تقسيم الشاشة
-col1, col2 = st.columns([1, 1], gap="large")
+code_area = st.text_area("Source Code Input:", height=300, placeholder="Paste your python code here...")
 
-with col1:
-    st.subheader("📝 إدخال البيانات للتحليل")
-    tab1, tab2 = st.tabs(["إدخال يدوي (Manual)", "رفع ملف (Upload CSV)"])
-    
-    input_values = []
-    
-    with tab1:
-        if features_list:
-            st.info("أدخلي القيم المستخرجة من تحليل الكود:")
-            # إنشاء حقول إدخال ديناميكية بناءً على الأعمدة التي تدرب عليها الموديل
+if st.button("Analyze Code 🚀"):
+    if code_area and model:
+        raw_metrics = extract_metrics_from_python(code_area)
+        if raw_metrics:
+            # ترتيب المقاييس لتمشي مع ترتيب الموديل
+            input_data = []
             for feat in features_list:
-                val = st.number_input(f"المقياس: {feat}", value=0.0, step=0.1, key=feat)
-                input_values.append(val)
-        else:
-            st.warning("لم يتم العثور على قائمة الميزات. تأكدي من تشغيل train_model.py أولاً.")
-
-    with tab2:
-        uploaded_file = st.file_input("ارفعي ملف CSV يحتوي على نفس المقاييس:")
-        if uploaded_file:
-            df_upload = pd.read_csv(uploaded_file)
-            st.write("معاينة البيانات المرفوعة:")
-            st.dataframe(df_upload.head(3))
-
-with col2:
-    st.subheader("🔍 نتيجة التنبؤ بالذكاء الاصطناعي")
-    
-    if st.button("Run AI Audit 🚀"):
-        if model and scaler and features_list:
-            # تجهيز البيانات للتنبؤ
-            final_input = np.array([input_values])
-            
-            # توحيد البيانات
-            input_scaled = scaler.transform(final_input)
+                input_data.append(raw_metrics.get(feat, 0)) # إذا لم يجد المقياس يضع 0
             
             # التنبؤ
+            input_scaled = scaler.transform([input_data])
             prediction = model.predict(input_scaled)[0]
-            probability = model.predict_proba(input_scaled)[0][1]
+            prob = model.predict_proba(input_scaled)[0][1]
             
             st.divider()
+            col1, col2 = st.columns(2)
             
-            if prediction == 1:
-                st.error(f"🚨 نتيجة الفحص: احتمالية وجود عيوب (Defective)")
-                st.metric("مستوى الخطورة", f"{probability:.2%}")
-                st.progress(probability)
-            else:
-                st.success(f"✅ نتيجة الفحص: الكود سليم (Clean)")
-                st.metric("مستوى الأمان", f"{1-probability:.2%}")
-                st.progress(1.0 - probability)
-            
-            # رسم بياني للميزات المدخلة
-            fig_data = pd.DataFrame({'Metric': features_list, 'Value': input_values
+            with col1:
+                if prediction == 1:
+                    st.error(f"🚨 النتيجة: احتمالية وجود عيوب عالية ({prob:.2%})")
+                else:
+                    st.success(f"✅ النتيجة: الكود سليم ومعياري ({1-prob:.2%})")
+                
+                st.write("📊 المقاييس المستخرجة:")
+                st.dataframe(pd.Series(raw_metrics).head(10)) # عرض أول 10 مقاييس للتبسيط
+                
+            with col2:
+                # رسم بياني سريع
+                fig = px.bar(x=features_list[:10], y=input_data[:10], labels={'x':'Metric', 'y':'Value'})
+                st.plotly_chart(fig)
+        else:
+            st.error("تعذر تحليل الكود. تأكدي أنه كود بايثون صحيح.")
