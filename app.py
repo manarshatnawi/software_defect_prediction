@@ -1,88 +1,54 @@
 import tkinter as tk
-from tkinter import messagebox, ttk
+from tkinter import messagebox
 import joblib
-import pandas as pd
 import numpy as np
 
-# 1. تحميل النموذج والـ Scaler والتعرف على الأعمدة
-try:
-    model = joblib.load('defect_model.pkl')
-    scaler = joblib.load('scaler.pkl')
-    
-    # نقرأ أسماء الأعمدة من ملف البيانات الضخم (بدون العمود الأخير)
-    df = pd.read_csv('big_metrics.csv')
-    # تنظيف سريع للبيانات للتأكد من توافق الأعمدة
-    df = df.apply(pd.to_numeric, errors='coerce').dropna()
-    df_columns = df.iloc[:, :-1].columns.tolist()
-    
-    print(f"✅ تم تحميل النموذج بنجاح. عدد الميزات المطلوب إدخالها: {len(df_columns)}")
-except Exception as e:
-    print(f"❌ خطأ: تأكد من وجود الملفات في نفس المجلد (big_metrics.csv, defect_model.pkl, scaler.pkl)")
-    exit()
+# 1. تحميل النموذج المحفوظ
+model = joblib.load('defect_model.pkl')
+scaler = joblib.load('scaler.pkl')
 
 def predict_bug():
     try:
-        input_values = []
-        for entry in entry_fields:
-            val = entry.get()
-            if val == "": val = 0 
-            input_values.append(float(val))
+        # قراءة الأرقام من الخانات (مثال: أول ميزتين فقط للتبسيط)
+        val1 = float(entry1.get())
+        val2 = float(entry2.get())
+        # أضيفي بقية الميزات حسب عدد الأعمدة في ملفك
         
-        # عمل Scaling للمدخلات
-        final_features = scaler.transform([input_values])
+        # التجهيز للتوقع (يجب أن يكون عدد المدخلات نفس عدد أعمدة ملف CSV)
+        # هنا سنضع مصفوفة وهمية بنفس طول ميزاتك الأصلية
+        features = np.zeros(model.n_features_in_) 
+        features[0] = val1
+        features[1] = val2
         
-        # الحصول على "الاحتمالية" بدلاً من النتيجة النهائية 0 أو 1
-        probabilities = model.predict_proba(final_features)
-        bug_probability = probabilities[0][1] # احتمالية وجود خطأ
+        # عمل Scaling
+        final_features = scaler.transform([features])
         
-        print(f"Probability of bug: {bug_probability:.4f}") # سيظهر لك في الشاشة السوداء
+        # التوقع
+        prediction = model.predict(final_features)
         
-        # تقليل العتبة (Threshold) ليكون النموذج حساساً جداً
-        # إذا كانت الاحتمالية أكثر من 15%، نعتبره خطأ (لأغراض العرض)
-        if bug_probability > 0.15:
-            messagebox.showwarning("نتيجة الفحص", f"⚠️ تحذير: احتمالية وجود خطأ هي {bug_probability*100:.1f}%\nهذا الكود يحتاج مراجعة!")
+        if prediction[0] == 1:
+            messagebox.showwarning("النتيجة", "⚠️ تحذير: هذا الكود يحتوي على أخطاء برمجية!")
         else:
-            messagebox.showinfo("النتيجة", f"✅ الكود سليم.\nنسبة الشك في وجود خطأ: {bug_probability*100:.1f}%")
+            messagebox.showinfo("النتيجة", "✅ هذا الكود سليم وجاهز للاستخدام.")
             
     except Exception as e:
-        messagebox.showerror("خطأ", f"حدث خطأ: {e}")
+        messagebox.showerror("خطأ", "الرجاء إدخال أرقام صحيحة في الخانات.")
 
-# 2. بناء الواجهة الرسومية
+# 2. بناء النافذة
 root = tk.Tk()
-root.title("نظام التنبؤ الذكي للأخطاء البرمجية - JM1 Dataset")
-root.geometry("550x700")
+root.title("نظام التوقع الذكي للأخطاء")
+root.geometry("400x300")
 
-# إعداد منطقة التمرير (Scrollbar)
-main_frame = tk.Frame(root)
-main_frame.pack(fill=tk.BOTH, expand=1)
+tk.Label(root, text="أدخل مقاييس الكود (Metrics):", font=("Arial", 12, "bold")).pack(pady=10)
 
-canvas = tk.Canvas(main_frame, bg="#f0f0f0")
-canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=1)
+tk.Label(root, text="عدد أسطر الكود (LOC):").pack()
+entry1 = tk.Entry(root)
+entry1.pack()
 
-scrollbar = ttk.Scrollbar(main_frame, orient=tk.VERTICAL, command=canvas.yview)
-scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+tk.Label(root, text="درجة التعقيد (Complexity):").pack()
+entry2 = tk.Entry(root)
+entry2.pack()
 
-canvas.configure(yscrollcommand=scrollbar.set)
-canvas.bind('<Configure>', lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-
-second_frame = tk.Frame(canvas, bg="#f0f0f0")
-canvas.create_window((0,0), window=second_frame, anchor="nw")
-
-# العنوان
-tk.Label(second_frame, text="فحص جودة البرمجيات (Deep Learning)", 
-         font=("Arial", 14, "bold"), fg="#2c3e50", bg="#f0f0f0").grid(row=0, column=0, columnspan=2, pady=20)
-
-# إنشاء 21 خانة إدخال تلقائياً بناءً على أسماء المقاييس في ناسا
-entry_fields = []
-for i, col_name in enumerate(df_columns):
-    tk.Label(second_frame, text=f"{col_name}:", font=("Arial", 10), bg="#f0f0f0").grid(row=i+1, column=0, padx=20, pady=5, sticky="e")
-    entry = tk.Entry(second_frame, width=25, font=("Arial", 10))
-    entry.grid(row=i+1, column=1, padx=20, pady=5)
-    entry_fields.append(entry)
-
-# زر التوقع
-btn_predict = tk.Button(second_frame, text="إجراء الفحص والتوقع", command=predict_bug, 
-                        bg="#27ae60", fg="white", font=("Arial", 11, "bold"), width=20, height=2)
-btn_predict.grid(row=len(df_columns)+1, column=0, columnspan=2, pady=30)
+tk.Button(root, text="ابدأ فحص الكود", command=predict_bug, bg="blue", fg="white").pack(pady=20)
 
 root.mainloop()

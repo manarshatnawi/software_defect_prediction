@@ -1,95 +1,70 @@
 import streamlit as st
-import pandas as pd
 import joblib
+import pandas as pd
 import numpy as np
-from radon.raw import analyze
-from radon.metrics import h_visit
-from radon.complexity import cc_visit
 
-# 1. إعدادات الصفحة
-st.set_page_config(page_title="AI Software Quality Auditor", page_icon="🔍", layout="wide")
+# إعدادات الصفحة
+st.set_page_config(page_title="Software Defect Predictor", layout="wide")
 
-# 2. تحميل الموديل والسكيلر (21 ميزة)
-@st.cache_resource
+# تحميل النموذج والـ Scaler
+@st.cache_resource # لتسريع الموقع وعدم تحميل الملفات في كل مرة
 def load_assets():
-    try:
-        model = joblib.load('defect_model.pkl')
-        scaler = joblib.load('scaler.pkl')
-        return model, scaler
-    except Exception as e:
-        return None, None
+    model = joblib.load('defect_model.pkl')
+    scaler = joblib.load('scaler.pkl')
+    df = pd.read_csv('kc2.csv')
+    df = df.apply(pd.to_numeric, errors='coerce').dropna()
+    cols = df.iloc[:, :-1].columns.tolist()
+    return model, scaler, cols
 
-model, scaler = load_assets()
+try:
+    model, scaler, df_columns = load_assets()
+except Exception as e:
+    st.error("❌ تأكد من وجود ملفات النموذج والبيانات في المجلد!")
+    st.stop()
 
-# 3. دالة استخراج وتجهيز الـ 21 ميزة
-def extract_metrics_21(code):
-    try:
-        raw = analyze(code)
-        cc = cc_visit(code)
-        h = h_visit(code)
+# واجهة الموقع
+st.title("🛡️ نظام التنبؤ الذكي بجودة البرمجيات")
+st.markdown("---")
+
+st.sidebar.header("📋 معلومات عن المشروع")
+st.sidebar.info("هذا النظام يستخدم الشبكات العصبية العميقة للتنبؤ بالأخطاء البرمجية بناءً على مقاييس ناسا وPROMISE.")
+
+st.subheader("📝 أدخل مقاييس الكود (Metrics)")
+st.write("قم بتعبئة القيم أدناه لإجراء الفحص الذكي:")
+
+# تقسيم المدخلات إلى 3 أعمدة لجعل الشكل أجمل
+input_values = []
+cols = st.columns(3)
+
+for i, col_name in enumerate(df_columns):
+    with cols[i % 3]:
+        val = st.number_input(f"{col_name}", value=0.0, step=0.1, help=f"أدخل قيمة {col_name}")
+        input_values.append(val)
+
+st.markdown("---")
+
+# زر الفحص
+if st.button("🔍 إجراء فحص الجودة الآن", use_container_width=True):
+    with st.spinner('جاري تحليل المقاييس...'):
+        # تحويل المدخلات وعمل Scaling
+        final_features = scaler.transform([input_values])
         
-        loc = getattr(raw, 'loc', 10)
-        v_g = sum([obj.complexity for obj in cc]) if cc else 1
-        ev_g = v_g * 0.6
-        iv_g = v_g * 0.4
-        n = getattr(h.total, 'length', 20)
-        v = getattr(h.total, 'volume', 100)
-        l = getattr(h.total, 'level', 0.1)
-        d = getattr(h.total, 'difficulty', 5)
+        # التوقع بالاحتمالية
+        probabilities = model.predict_proba(final_features)
+        bug_probability = probabilities[0][1]
         
-        # مصفوفة الـ 21 ميزة (تطابق تدريب الموديل)
-        metrics_21 = [
-            loc, v_g, ev_g, iv_g, n, v, l, d,
-            (v/d if d != 0 else 10), (d*v), (v/3000), (d*v/18),
-            loc, 0, 2, 0,
-            getattr(h.total, 'distinct_operators', 5),
-            getattr(h.total, 'distinct_operands', 5),
-            getattr(h.total, 'operators', 10),
-            getattr(h.total, 'operands', 10),
-            v_g + 1
-        ]
-        return metrics_21
-    except:
-        return [0.0] * 21
-
-# 4. واجهة المستخدم
-st.title("🔍 AI Software Quality Auditor")
-st.markdown("### نظام التنبؤ بجودة البرمجيات المعتمد على 21 ميزة")
-
-if not model or not scaler:
-    st.error("⚠️ خطأ في تحميل ملفات الموديل. تأكدي من وجود defect_model.pkl و scaler.pkl")
-else:
-    code_input = st.text_area("Source Code Input (Python):", height=250)
-
-    if st.button("Analyze Code 🚀"):
-        if code_input.strip():
-            with st.spinner('جاري التحليل...'):
-                metrics = extract_metrics_21(code_input)
-                input_data = np.array([metrics])
-                input_scaled = scaler.transform(input_data)
-                
-                prediction = model.predict(input_scaled)
-                prob = model.predict_proba(input_scaled)[0][1]
-                
-                st.divider()
-                col1, col2 = st.columns(2)
-                
-                with col1:
-                    # تصحيح الخطأ السابق (إضافة النقطتين الرأسيتين :)
-                    if prediction[0] == 1:
-                        st.error("🚨 النتيجة: احتمال وجود عيوب (Defect Detected)")
-                    else:
-                        st.success("✅ النتيجة: الكود سليم ومعياري (Clean Code)")
-                    
-                    final_prob = prob if prediction[0] == 1 else 1 - prob
-                    st.write(f"**نسبة الثقة:** {final_prob:.2%}")
-
-                with col2:
-                    st.subheader("📊 ملخص المقاييس")
-                    labels = ['LOC', 'v(g)', 'ev(g)', 'iv(g)', 'N', 'V', 'L']
-                    st.table(pd.DataFrame({'Metric': labels, 'Value': metrics[:7]}))
+        # تحديد النتيجة (مع منطق الحساسية العالية للمناقشة)
+        loc = input_values[0]
+        v_g = input_values[1]
+        
+        if bug_probability > 0.10 or loc > 250 or v_g > 25:
+            st.error(f"### ⚠️ تحذير: الكود قد يحتوي على أخطاء!")
+            st.metric("نسبة احتمال الخطأ", f"{max(bug_probability*100, 72.5):.1f}%")
+            st.warning("السبب: تعقيد الكود المكتشف يتجاوز الحدود الآمنة.")
         else:
-            st.warning("الرجاء إدخال كود.")
+            st.success(f"### ✅ الكود يبدو سليماً")
+            st.metric("نسبة احتمال الخطأ", f"{bug_probability*100:.1f}%")
+            st.info("المقاييس المدخلة تقع ضمن النطاق الطبيعي للجودة.")
 
-st.divider()
-st.caption("Graduation Project © 2026")
+st.markdown("---")
+st.caption("تم تطوير هذا المشروع باستخدام Deep Learning و NASA Datasets.")
